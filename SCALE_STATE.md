@@ -18,6 +18,18 @@
 - Prediction comparison: pending.
 - Decision: run `PEAK_TFLOPS=<actual> MODELS=150m GPU_COUNTS='1 2' make benchmark`, update this file, then commit before changing a tuning variable.
 
+## Iteration 1 — make distributed evidence fail closed
+
+- Bottleneck selected: rank-local setup and checkpoint failures could leave healthy ranks blocked in a later collective, while an overlapping generated-data exclusion could omit tracked source from experiment identity.
+- Evidence: adversarial review of provenance discovery and each distributed checkpoint phase; regression tests reproduce tracked-source exclusion, rank-payload write failure, and state-restore failure.
+- Predicted effect: no throughput change; failures should surface with the responsible rank and phase within the configured process-group/orchestration timeout, and every tracked source edit should change experiment identity.
+- Smallest benchmark and fixed controls: focused CPU tests for provenance/checkpoint/trainer behavior, followed by the unchanged 1/2/4-process correctness workload and 1/2-process hard-crash resume workflow.
+- Profile artifact: machine-readable correctness and fault-test attestations under `results/`; subprocess stdout/stderr and checkpoint hashes retained by the fault-test attestation.
+- Observed result: focused suite passes (19 tests); complete acceptance rerun is the release gate.
+- Prediction error/explanation: none observed in focused validation; DDP/FSDP constructor collectives can only be bounded by the process-group timeout because a peer may fail inside the collective itself.
+- Next decision: do not tune throughput until real CUDA measurements identify a bottleneck.
+- Commits: `c97705d`, `387e245`.
+
 ## Iteration template
 
 Copy this block for every change; vary one primary factor at a time.
