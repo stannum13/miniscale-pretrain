@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -11,6 +12,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
+from scripts.process_runner import run_process_group
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,14 +37,14 @@ def run(
     world_size: int,
     use_cuda: bool,
     expect_failure: bool = False,
+    timeout_seconds: float = 120.0,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     if not use_cuda:
         environment["CUDA_VISIBLE_DEVICES"] = ""
-    completed = subprocess.run(
+    completed = run_process_group(
         build_train_command(arguments, world_size=world_size, port=free_port()),
-        cwd=ROOT, env=environment, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cwd=ROOT, env=environment, timeout_seconds=timeout_seconds,
     )
     valid = completed.returncode != 0 if expect_failure else completed.returncode == 0
     if not valid:
@@ -73,10 +76,19 @@ def read_steps(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hard-crash and exact-resume checkpoint test")
     parser.add_argument("--world-size", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--timeout", type=float, default=120.0, help="seconds per torchrun launch")
     args = parser.parse_args()
     visible_cuda = torch.cuda.device_count()
     use_cuda = visible_cuda >= args.world_size if args.device == "auto" else args.device == "cuda"
@@ -89,13 +101,15 @@ def main() -> None:
             "--config", "configs/smoke.yaml", "--strategy", strategy,
             "--output-dir", str(output),
         )
-        run(*common, "--run-id", "baseline", world_size=args.world_size, use_cuda=use_cuda)
+        run(*common, "--run-id", "baseline", world_size=args.world_size,
+            use_cuda=use_cuda, timeout_seconds=args.timeout)
         run(*common, "--run-id", "recovered", "--crash-after", "3",
-            world_size=args.world_size, use_cuda=use_cuda, expect_failure=True)
+            world_size=args.world_size, use_cuda=use_cuda, expect_failure=True,
+            timeout_seconds=args.timeout)
         resume = output / "recovered/checkpoints/step-00000002"
         assert (resume / "COMPLETE").exists(), "last pre-failure checkpoint is incomplete"
         run(*common, "--run-id", "recovered", "--resume", str(resume),
-            world_size=args.world_size, use_cuda=use_cuda)
+            world_size=args.world_size, use_cuda=use_cuda, timeout_seconds=args.timeout)
         for rank in range(args.world_size):
             name = f"rank-{rank:05d}.pt"
             baseline_path = output / "baseline/checkpoints/step-00000004" / name
@@ -111,6 +125,21 @@ def main() -> None:
         assert [row["sample_cursor"] for row in recovered_tail] == [24, 32]
         for expected, actual in zip(baseline_steps[2:], recovered_tail):
             assert abs(expected["loss"] - actual["loss"]) <= 1e-7
+        run_manifests = {
+            name: json.loads((output / name / "run.json").read_text())
+            for name in ("baseline", "recovered")
+        }
+        artifact_hashes: dict[str, dict[str, str]] = {}
+        for name in ("baseline", "recovered"):
+            run_root = output / name
+            files = [run_root / "steps.jsonl", run_root / "checkpoints/step-00000004/metadata.json"]
+            files.extend(
+                run_root / f"checkpoints/step-00000004/rank-{rank:05d}.pt"
+                for rank in range(args.world_size)
+            )
+            artifact_hashes[name] = {
+                str(path.relative_to(run_root)): sha256(path) for path in files
+            }
         result = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "status": "pass",
@@ -125,6 +154,8 @@ def main() -> None:
                 abs(a["loss"] - b["loss"]) for a, b in zip(baseline_steps[2:], recovered_tail)
             ),
             "checkpoint_contents_equal": True,
+            "run_manifests": run_manifests,
+            "artifact_sha256": artifact_hashes,
         }
     destination = ROOT / "results/fault-tests" / (
         f'{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")}-world{args.world_size}.json'
