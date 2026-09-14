@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+data/processed/
+results/runs/
+results/smoke/
+results/fault-tests/*.json
+profiles/*.json
+profiles/*.sqlite
+figures/*.png

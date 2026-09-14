@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 import signal
 import time
@@ -84,6 +85,7 @@ def run_training(
     *,
     run_id: str | None = None,
     stop_after: int | None = None,
+    crash_after: int | None = None,
 ) -> TrainResult:
     context = DistributedContext.from_environment()
     config.validate(context.world_size)
@@ -191,6 +193,9 @@ def run_training(
             if completed % config.checkpoint_interval == 0:
                 last_checkpoint = _latest_or_save(checkpoint_root, model, optimizer, scheduler,
                                                   context, completed, sample_cursor, config)
+            if crash_after is not None and completed >= crash_after:
+                context.barrier()
+                os._exit(86)
             if stop_requested or (stop_after is not None and completed >= stop_after):
                 last_checkpoint = _latest_or_save(checkpoint_root, model, optimizer, scheduler,
                                                   context, completed, sample_cursor, config)
