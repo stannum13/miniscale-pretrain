@@ -107,6 +107,7 @@ def run_training(
     if config.data.synthetic:
         ensure_synthetic_dataset(config.data.directory, config.model.vocab_size)
     dataset = TokenShardDataset(config.data.directory, config.sequence_length, config.data.seed)
+    dataset.validate_vocab_size(config.model.vocab_size)
     raw_model = Transformer(config.model)
     model, communication = wrap_model(raw_model, config.strategy, context, bf16=config.bf16)
     if config.compile:

@@ -21,6 +21,8 @@ def test_manifest_hashes_and_sampling_are_reproducible(tmp_path: Path) -> None:
     torch.testing.assert_close(first.sample(11), second.sample(11))
     assert first.manifest["dataset"]["revision"] == "abc"
     assert all(len(shard["sha256"]) == 64 for shard in first.manifest["shards"])
+    assert first.manifest["min_token_id"] == 0
+    assert first.manifest["max_token_id"] == 96
 
 
 def test_rank_batches_are_disjoint_and_resume_from_cursor(tmp_path: Path) -> None:
@@ -43,3 +45,13 @@ def test_manifest_tampering_is_detected(tmp_path: Path) -> None:
         assert "hash mismatch" in str(exc)
     else:
         raise AssertionError("corrupt shard was accepted")
+
+
+def test_dataset_rejects_tokens_outside_model_vocabulary(tmp_path: Path) -> None:
+    dataset = make_dataset(tmp_path)
+    try:
+        dataset.validate_vocab_size(64)
+    except ValueError as exc:
+        assert "token id 96" in str(exc)
+    else:
+        raise AssertionError("out-of-vocabulary token shard was accepted")

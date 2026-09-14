@@ -38,6 +38,8 @@ def write_token_shards(
     root.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, int | str]] = []
     total = 0
+    minimum: int | None = None
+    maximum: int | None = None
     for index, tokens in enumerate(shards):
         array = np.asarray(tokens, dtype="<u4")
         if not len(array):
@@ -48,6 +50,9 @@ def write_token_shards(
         os.replace(temporary, path)
         records.append({"file": path.name, "tokens": int(len(array)), "sha256": _sha256(path)})
         total += len(array)
+        shard_min, shard_max = int(array.min()), int(array.max())
+        minimum = shard_min if minimum is None else min(minimum, shard_min)
+        maximum = shard_max if maximum is None else max(maximum, shard_max)
     if not records:
         raise ValueError("at least one non-empty token shard is required")
     manifest = {
@@ -56,6 +61,8 @@ def write_token_shards(
         "dataset": dataset,
         "tokenizer": tokenizer,
         "total_tokens": total,
+        "min_token_id": minimum,
+        "max_token_id": maximum,
         "shards": records,
     }
     destination = root / "manifest.json"
@@ -111,6 +118,15 @@ class TokenShardDataset:
             multiplier += 2
         self._multiplier = multiplier
         self._offset = (seed * 0x9E3779B1) % windows
+
+    def validate_vocab_size(self, vocab_size: int) -> None:
+        maximum = self.manifest.get("max_token_id")
+        if maximum is None:  # Backward-compatible validation for format-v1 manifests.
+            maximum = max(int(np.max(shard)) for shard in self.shards)
+        if int(maximum) >= vocab_size:
+            raise ValueError(
+                f"dataset contains token id {maximum}, outside model vocabulary size {vocab_size}"
+            )
 
     def _window(self, global_index: int) -> tuple[int, int]:
         permuted = (self._multiplier * (global_index % self.num_windows) + self._offset) % self.num_windows
