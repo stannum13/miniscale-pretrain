@@ -64,7 +64,7 @@ class StepTimer:
     def __init__(self, device: torch.device) -> None:
         self.device = device
         self.values: dict[str, float] = {}
-        self._events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]] = {}
+        self._events: dict[str, list[tuple[torch.cuda.Event, torch.cuda.Event]]] = {}
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -73,14 +73,17 @@ class StepTimer:
             start.record()
             yield
             end.record()
-            self._events[name] = (start, end)
+            self._events.setdefault(name, []).append((start, end))
         else:
             start_time = time.perf_counter()
             yield
-            self.values[name] = (time.perf_counter() - start_time) * 1000
+            self.values[name] = self.values.get(name, 0.0) + (time.perf_counter() - start_time) * 1000
 
     def finish(self) -> dict[str, float]:
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
-            self.values.update({name: start.elapsed_time(end) for name, (start, end) in self._events.items()})
+            self.values.update({
+                name: sum(start.elapsed_time(end) for start, end in events)
+                for name, events in self._events.items()
+            })
         return dict(self.values)

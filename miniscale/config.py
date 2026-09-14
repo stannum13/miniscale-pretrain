@@ -53,6 +53,7 @@ class TrainConfig:
     strategy: str = "single"
     bf16: bool = True
     compile: bool = False
+    hardware_peak_tflops: float = 0.0
     sequence_length: int = 1_024
     micro_batch_size: int = 2
     global_batch_size: int = 32

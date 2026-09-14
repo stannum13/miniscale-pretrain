@@ -63,6 +63,19 @@ def write_token_shards(
     return destination
 
 
+def ensure_synthetic_dataset(directory: str | Path, vocab_size: int, tokens: int = 16_384) -> Path:
+    root = Path(directory)
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        return manifest
+    values = ((np.arange(tokens, dtype=np.uint64) * 73 + 19) % vocab_size).astype(np.uint32)
+    return write_token_shards(
+        [values], root,
+        dataset={"name": "deterministic-synthetic", "revision": "generator-v1"},
+        tokenizer={"name": "integer-fixture", "revision": "generator-v1"},
+    )
+
+
 class TokenShardDataset:
     """Random-access packed token sequences with a deterministic global order."""
 
