@@ -1,10 +1,17 @@
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 
 from data.dataset import ensure_synthetic_dataset
 from miniscale.config import load_config
-from miniscale.provenance import digest_files, experiment_key, prepare_run_directory
+from miniscale.provenance import (
+    _working_tree_digest,
+    digest_files,
+    experiment_key,
+    prepare_run_directory,
+)
 
 
 def test_compiled_and_eager_runs_have_different_experiment_keys(tmp_path) -> None:
@@ -82,3 +89,30 @@ def test_source_digest_and_experiment_key_change_with_source_bytes(tmp_path) -> 
     assert experiment_key(cfg, "fixture", source_state_digest=first) != experiment_key(
         cfg, "fixture", source_state_digest=second
     )
+
+
+def test_source_discovery_is_independent_of_caller_directory(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(Path(__file__).parents[1] / "configs/smoke.yaml")
+    cfg.data.directory = str(tmp_path / "tokens")
+    ensure_synthetic_dataset(cfg.data.directory, cfg.model.vocab_size)
+    path = prepare_run_directory(tmp_path / "output/run", cfg, device_type="cpu",
+                                 backend="none", hardware="fixture", world_size=1,
+                                 is_resume=False)
+    payload = json.loads(path.read_text())
+    assert payload["source_digest"] not in {"", "unknown"}
+    assert payload["git_commit"] != "unknown"
+
+
+def test_source_digest_excludes_generated_output_tree(tmp_path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    source = tmp_path / "train.py"
+    source.write_text("source")
+    subprocess.run(["git", "add", "train.py"], cwd=tmp_path, check=True)
+    before = _working_tree_digest(repo_root=tmp_path, excluded_roots=[tmp_path / "runs"])
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs/metrics.jsonl").write_text("generated")
+    after = _working_tree_digest(repo_root=tmp_path, excluded_roots=[tmp_path / "runs"])
+    assert after == before
+    source.write_text("changed")
+    assert _working_tree_digest(repo_root=tmp_path, excluded_roots=[tmp_path / "runs"]) != before

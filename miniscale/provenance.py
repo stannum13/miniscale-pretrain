@@ -16,6 +16,9 @@ import torch
 from miniscale.config import TrainConfig
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
 def manifest_sha256(config: TrainConfig) -> str:
     return hashlib.sha256((Path(config.data.directory) / "manifest.json").read_bytes()).hexdigest()
 
@@ -41,19 +44,44 @@ def digest_files(root: str | Path, relative_paths: list[str]) -> str:
     return digest.hexdigest()
 
 
-def _working_tree_digest() -> str:
+def _is_excluded(path: Path, excluded_roots: list[Path]) -> bool:
+    resolved = path.resolve()
+    return any(resolved == root or root in resolved.parents for root in excluded_roots)
+
+
+def _fallback_source_paths(root: Path, excluded_roots: list[Path]) -> list[str]:
+    allowed_suffixes = {".py", ".yaml", ".yml", ".toml", ".sh", ".md"}
+    paths = []
+    for path in root.rglob("*"):
+        if _is_excluded(path, excluded_roots) or any(part in {".git", "__pycache__"} for part in path.parts):
+            continue
+        if path.is_file() and (path.suffix in allowed_suffixes or path.name == "Makefile"):
+            paths.append(str(path.relative_to(root)))
+    return paths
+
+
+def _working_tree_digest(
+    *,
+    repo_root: str | Path = REPOSITORY_ROOT,
+    excluded_roots: list[str | Path] | None = None,
+) -> str:
+    root = Path(repo_root).resolve()
+    exclusions = [Path(path).resolve() for path in (excluded_roots or [])]
+    if root in exclusions:
+        raise ValueError("cannot exclude the repository root from source identity")
     try:
-        root = Path(subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL
-        ).strip())
         raw = subprocess.check_output(
-            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-            cwd=root,
+            ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         )
-        paths = [item.decode() for item in raw.split(b"\0") if item]
-        return digest_files(root, paths)
+        paths = [
+            item.decode() for item in raw.split(b"\0") if item
+            and not _is_excluded(root / item.decode(), exclusions)
+        ]
     except (OSError, subprocess.CalledProcessError):
-        return "unknown"
+        paths = _fallback_source_paths(root, exclusions)
+    if not paths:
+        raise RuntimeError(f"no source files available for provenance under {root}")
+    return digest_files(root, paths)
 
 
 def experiment_key(
@@ -90,17 +118,19 @@ def experiment_key(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _source_state() -> tuple[str, bool, str]:
+def _source_state(*, excluded_roots: list[str | Path] | None = None) -> tuple[str, bool, str]:
     try:
         commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+            ["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL,
         ).strip()
         dirty = bool(subprocess.check_output(
-            ["git", "status", "--porcelain"], text=True, stderr=subprocess.DEVNULL
+            ["git", "-C", str(REPOSITORY_ROOT), "status", "--porcelain"],
+            text=True, stderr=subprocess.DEVNULL,
         ).strip())
-        return commit, dirty, _working_tree_digest()
+        return commit, dirty, _working_tree_digest(excluded_roots=excluded_roots)
     except (OSError, subprocess.CalledProcessError):
-        return "unknown", True, _working_tree_digest()
+        return "unavailable", True, _working_tree_digest(excluded_roots=excluded_roots)
 
 
 def _normalized_config(config: TrainConfig) -> dict:
@@ -121,7 +151,8 @@ def prepare_run_directory(
 ) -> Path:
     root = Path(run_root)
     path = root / "run.json"
-    commit, dirty, source_digest = _source_state()
+    excluded = [root, Path(config.data.directory)]
+    commit, dirty, source_digest = _source_state(excluded_roots=excluded)
     dataset_manifest = json.loads((Path(config.data.directory) / "manifest.json").read_text(encoding="utf-8"))
     identity = {
         "config": _normalized_config(config),
