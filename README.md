@@ -11,6 +11,7 @@ An explicit, reproducible miniature LLM pretraining system for studying how one 
 - Constant-global-batch derivation, gradient accumulation with `no_sync`, BF16, gradient clipping, and cosine decay.
 - Per-step and measured-window throughput, per-GPU throughput, peak HBM, MFU, phase timings, DDP communication, loss, and gradient norm.
 - Rank-local topology-specific checkpoints containing model, optimizer, scheduler, RNG, global step, and exact global sample cursor.
+- Immutable `run.json` provenance containing the complete normalized configuration, corpus/tokenizer manifest and hashes, source commit/dirty state, topology, device, and software environment. Existing run IDs require explicit resume and matching provenance.
 - A hard-crash recovery test and report generation that leaves missing experiments as `NOT RUN`.
 
 ## Setup

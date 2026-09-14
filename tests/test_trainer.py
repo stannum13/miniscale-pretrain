@@ -39,3 +39,10 @@ def test_interrupted_resume_matches_uninterrupted_loss_and_weights(tmp_path: Pat
     resumed_state = checkpoint_model(resumed.last_checkpoint)
     for key in baseline_state:
         torch.testing.assert_close(baseline_state[key], resumed_state[key], rtol=0, atol=1e-7)
+
+
+def test_reusing_run_id_without_resume_is_rejected(tmp_path: Path) -> None:
+    cfg = configured(tmp_path, "collision")
+    run_training(cfg, run_id="same")
+    with pytest.raises(FileExistsError, match="already exists"):
+        run_training(cfg, run_id="same")

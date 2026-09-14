@@ -52,6 +52,9 @@ class BenchmarkRecord:
     torch_version: str
     cuda_version: str | None
     experiment_key: str
+    git_commit: str
+    dataset_revision: str
+    tokenizer_revision: str
 
 
 def write_jsonl(path: str | Path, record: BenchmarkRecord | dict) -> None:

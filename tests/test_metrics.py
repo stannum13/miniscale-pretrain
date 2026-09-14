@@ -20,6 +20,7 @@ def test_jsonl_contains_required_metrics(tmp_path) -> None:
         loss=3.0, gradient_norm=1.2, device_type="cuda", backend="nccl",
         hardware="fixture-gpu", torch_version="fixture", cuda_version="fixture",
         experiment_key="controlled-fixture",
+        git_commit="abc123", dataset_revision="dataset-rev", tokenizer_revision="tokenizer-rev",
     )
     path = tmp_path / "metrics.jsonl"
     write_jsonl(path, record)

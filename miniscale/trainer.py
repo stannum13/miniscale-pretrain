@@ -20,7 +20,7 @@ from distributed.runtime import DistributedContext, peak_memory_bytes, reset_pea
 from distributed.strategies import wrap_model
 from miniscale.config import TrainConfig
 from miniscale.metrics import BenchmarkRecord, StepTimer, mfu, write_jsonl
-from miniscale.provenance import experiment_key, hardware_name
+from miniscale.provenance import experiment_key, hardware_name, prepare_run_directory
 from model.transformer import Transformer, estimate_config_flops
 
 
@@ -108,6 +108,29 @@ def run_training(
         ensure_synthetic_dataset(config.data.directory, config.model.vocab_size)
     dataset = TokenShardDataset(config.data.directory, config.sequence_length, config.data.seed)
     dataset.validate_vocab_size(config.model.vocab_size)
+    identifier = run_id or config.run_name
+    run_root = Path(config.output_dir) / identifier
+    backend = dist.get_backend() if context.distributed else "none"
+    hardware = hardware_name(context.device)
+    preparation_error: list[tuple[str, str] | None] = [None]
+    if context.is_main:
+        try:
+            prepare_run_directory(
+                run_root, config, device_type=context.device.type, backend=backend,
+                hardware=hardware, world_size=context.world_size, is_resume=config.resume is not None,
+            )
+        except (FileExistsError, ValueError) as exc:
+            preparation_error[0] = (type(exc).__name__, str(exc))
+    if context.distributed:
+        dist.broadcast_object_list(preparation_error, src=0)
+    if preparation_error[0] is not None:
+        error_type, message = preparation_error[0]
+        context.close()
+        if error_type == "FileExistsError":
+            raise FileExistsError(message)
+        raise ValueError(message)
+    context.barrier()
+    run_manifest = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     raw_model = Transformer(config.model)
     model, communication = wrap_model(raw_model, config.strategy, context, bf16=config.bf16)
     if config.compile:
@@ -118,8 +141,6 @@ def run_training(
     )
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _schedule(config))
     accumulation = config.gradient_accumulation_steps(context.world_size)
-    identifier = run_id or config.run_name
-    run_root = Path(config.output_dir) / identifier
     checkpoint_root = run_root / "checkpoints"
     steps_path = run_root / "steps.jsonl"
     checkpoint_root.mkdir(parents=True, exist_ok=True)
@@ -226,7 +247,6 @@ def run_training(
             seconds = average("step_time_ms") / 1000
             tokens_per_step = config.global_batch_size * config.sequence_length
             flop_count = estimate_config_flops(config.model, tokens_per_step, config.sequence_length)
-            hardware = hardware_name(context.device)
             record = BenchmarkRecord(
                 run_id=identifier, model=config.run_name, gpu_count=context.world_size,
                 strategy=config.strategy, micro_batch_size=config.micro_batch_size,
@@ -242,9 +262,12 @@ def run_training(
                 communication_ms=(average("communication_ms") if config.strategy == "ddp" else None),
                 loss=average("loss"), gradient_norm=average("gradient_norm"),
                 device_type=context.device.type,
-                backend=(dist.get_backend() if context.distributed else "none"),
+                backend=backend,
                 hardware=hardware, torch_version=torch.__version__, cuda_version=torch.version.cuda,
                 experiment_key=experiment_key(config, hardware),
+                git_commit=run_manifest["git_commit"],
+                dataset_revision=str(dataset.manifest["dataset"]["revision"]),
+                tokenizer_revision=str(dataset.manifest["tokenizer"]["revision"]),
             )
             write_jsonl(run_root / "benchmark.jsonl", record)
         return TrainResult(start_step, sample_cursor_start, config.max_steps, losses, False, last_checkpoint)
