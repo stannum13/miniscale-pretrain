@@ -7,6 +7,7 @@ import pytest
 from data.dataset import ensure_synthetic_dataset
 from miniscale.config import load_config
 from miniscale.provenance import (
+    _working_tree_dirty,
     _working_tree_digest,
     digest_files,
     experiment_key,
@@ -128,3 +129,20 @@ def test_source_digest_never_excludes_tracked_files(tmp_path) -> None:
     tracked.write_text("second")
     after = _working_tree_digest(repo_root=tmp_path, excluded_roots=[tmp_path / "data"])
     assert after != before
+
+
+def test_dirty_state_ignores_generated_untracked_outputs_but_not_tracked_changes(tmp_path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    source = tmp_path / "train.py"
+    source.write_text("first")
+    subprocess.run(["git", "add", "train.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"],
+        cwd=tmp_path, check=True,
+    )
+    output = tmp_path / "custom-output"
+    output.mkdir()
+    (output / "sibling-run.json").write_text("generated")
+    assert not _working_tree_dirty(repo_root=tmp_path, excluded_roots=[output])
+    source.write_text("second")
+    assert _working_tree_dirty(repo_root=tmp_path, excluded_roots=[output])

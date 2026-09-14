@@ -92,6 +92,34 @@ def _working_tree_digest(
     return digest_files(root, paths)
 
 
+def _working_tree_dirty(
+    *,
+    repo_root: str | Path = REPOSITORY_ROOT,
+    excluded_roots: list[str | Path] | None = None,
+) -> bool:
+    root = Path(repo_root).resolve()
+    exclusions = [Path(path).resolve() for path in (excluded_roots or [])]
+    if root in exclusions:
+        raise ValueError("cannot exclude the repository root from source identity")
+    try:
+        working_changed = subprocess.run(
+            ["git", "-C", str(root), "diff", "--quiet", "--"], check=False,
+        ).returncode != 0
+        staged_changed = subprocess.run(
+            ["git", "-C", str(root), "diff", "--cached", "--quiet", "--"], check=False,
+        ).returncode != 0
+        untracked_raw = subprocess.check_output(
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"],
+        )
+        untracked_source = any(
+            item and not _is_excluded(root / item.decode(), exclusions)
+            for item in untracked_raw.split(b"\0")
+        )
+        return working_changed or staged_changed or untracked_source
+    except (OSError, subprocess.CalledProcessError):
+        return True
+
+
 def experiment_key(
     config: TrainConfig,
     hardware: str,
@@ -132,10 +160,7 @@ def _source_state(*, excluded_roots: list[str | Path] | None = None) -> tuple[st
             ["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "HEAD"],
             text=True, stderr=subprocess.DEVNULL,
         ).strip()
-        dirty = bool(subprocess.check_output(
-            ["git", "-C", str(REPOSITORY_ROOT), "status", "--porcelain"],
-            text=True, stderr=subprocess.DEVNULL,
-        ).strip())
+        dirty = _working_tree_dirty(excluded_roots=excluded_roots)
         return commit, dirty, _working_tree_digest(excluded_roots=excluded_roots)
     except (OSError, subprocess.CalledProcessError):
         return "unavailable", True, _working_tree_digest(excluded_roots=excluded_roots)
@@ -159,7 +184,7 @@ def prepare_run_directory(
 ) -> Path:
     root = Path(run_root)
     path = root / "run.json"
-    excluded = [root, Path(config.data.directory)]
+    excluded = [Path(config.output_dir), Path(config.data.directory)]
     commit, dirty, source_digest = _source_state(excluded_roots=excluded)
     dataset_manifest = json.loads((Path(config.data.directory) / "manifest.json").read_text(encoding="utf-8"))
     identity = {
