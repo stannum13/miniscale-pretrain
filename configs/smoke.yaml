@@ -1,0 +1,27 @@
+run_name: smoke
+seed: 1337
+strategy: single
+bf16: false
+sequence_length: 32
+micro_batch_size: 2
+global_batch_size: 4
+max_steps: 4
+warmup_steps: 1
+measured_steps: 2
+learning_rate: 0.001
+min_learning_rate: 0.0001
+checkpoint_interval: 2
+output_dir: results/runs
+model:
+  vocab_size: 256
+  hidden_size: 64
+  num_layers: 2
+  num_heads: 4
+  num_kv_heads: 2
+  intermediate_size: 192
+  max_sequence_length: 64
+  activation_checkpointing: false
+data:
+  directory: data/processed/smoke
+  seed: 17
+  synthetic: true
