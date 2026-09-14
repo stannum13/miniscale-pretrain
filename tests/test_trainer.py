@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,8 @@ def test_interrupted_resume_matches_uninterrupted_loss_and_weights(tmp_path: Pat
     resumed = run_training(interrupted_cfg, run_id="resumed")
     assert resumed.start_step == 2 and resumed.sample_cursor_start == 16
     assert resumed.losses == pytest.approx(baseline.losses[2:], rel=0, abs=1e-7)
+    log_path = Path(interrupted_cfg.output_dir) / "resumed/steps.jsonl"
+    assert [json.loads(line)["step"] for line in log_path.read_text().splitlines()] == [1, 2, 3, 4]
     baseline_state = checkpoint_model(baseline.last_checkpoint)
     resumed_state = checkpoint_model(resumed.last_checkpoint)
     for key in baseline_state:

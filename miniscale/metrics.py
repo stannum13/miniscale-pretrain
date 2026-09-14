@@ -46,6 +46,12 @@ class BenchmarkRecord:
     communication_ms: float | None
     loss: float
     gradient_norm: float
+    device_type: str
+    backend: str
+    hardware: str
+    torch_version: str
+    cuda_version: str | None
+    experiment_key: str
 
 
 def write_jsonl(path: str | Path, record: BenchmarkRecord | dict) -> None:

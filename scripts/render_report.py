@@ -18,13 +18,14 @@ def load_records(root: str | Path) -> list[dict]:
 
 
 def build_rows(records: Iterable[dict]) -> list[dict]:
-    rows = [dict(record) for record in records]
-    baselines = {
-        row["model"]: row["tokens_per_second"]
-        for row in rows if row["gpu_count"] == 1 and row["strategy"] == "single"
-    }
+    rows = [dict(record) for record in records if record.get("device_type") == "cuda"]
+    baseline_groups: dict[tuple[str, str], list[float]] = {}
     for row in rows:
-        baseline = baselines.get(row["model"])
+        if row["gpu_count"] == 1 and row["strategy"] == "single":
+            baseline_groups.setdefault((row["model"], row["experiment_key"]), []).append(row["tokens_per_second"])
+    baselines = {key: sum(values) / len(values) for key, values in baseline_groups.items()}
+    for row in rows:
+        baseline = baselines.get((row["model"], row["experiment_key"]))
         row["scaling_efficiency"] = (
             scaling_efficiency(baseline, row["tokens_per_second"], row["gpu_count"])
             if baseline is not None else None
@@ -66,12 +67,18 @@ def main() -> None:
     parser.add_argument("--results", type=Path, default=Path("results"))
     parser.add_argument("--output", type=Path, default=Path("REPORT.md"))
     args = parser.parse_args()
-    table = render_table(build_rows(load_records(args.results)))
+    rows = build_rows(load_records(args.results))
+    table = render_table(rows)
+    status = (
+        "CUDA benchmark records were found and are shown below."
+        if rows
+        else "No CUDA benchmark records were found; all scaling cells remain pending."
+    )
     report = f"""# MiniScale Pretraining Report
 
 ## Status
 
-This report is generated only from completed `benchmark.jsonl` artifacts. `NOT RUN` means no measurement exists; it is not an estimate. The current repository was built and correctness-tested on a CPU-only host, so CUDA scaling claims remain pending.
+This report is generated only from completed CUDA `benchmark.jsonl` artifacts. CPU diagnostics are excluded. `NOT RUN` means no compatible measurement exists; it is not an estimate. {status}
 
 ## Scaling results
 

@@ -35,3 +35,10 @@ def test_smoke_batch_supports_four_way_distributed_run() -> None:
 @pytest.mark.parametrize("name", ("150m", "400m", "1b"))
 def test_scale_family_matches_default_tokenizer_vocabulary(name: str) -> None:
     assert load_config(Path("configs") / f"{name}.yaml").model.vocab_size == 49_152
+
+
+def test_compile_with_fsdp_is_rejected_until_checkpointing_supports_wrapper() -> None:
+    cfg = load_config("configs/1b.yaml")
+    cfg.compile = True
+    with pytest.raises(ValueError, match="compile.*FSDP"):
+        cfg.validate(world_size=2)

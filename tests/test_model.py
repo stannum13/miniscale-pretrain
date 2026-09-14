@@ -1,7 +1,7 @@
 import torch
 
 from miniscale.config import ModelConfig
-from model.transformer import Transformer, estimate_model_flops
+from model.transformer import Transformer, estimate_config_flops, estimate_model_flops
 
 
 def tiny_config(checkpointing: bool = False) -> ModelConfig:
@@ -45,3 +45,4 @@ def test_flop_estimate_scales_with_tokens_and_parameters() -> None:
     two = estimate_model_flops(model, tokens=20, sequence_length=8)
     assert one > 0
     assert two == 2 * one
+    assert estimate_config_flops(model.config, tokens=10, sequence_length=8) == one

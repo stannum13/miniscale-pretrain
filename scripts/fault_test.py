@@ -61,6 +61,7 @@ def main() -> None:
         equal(baseline, recovered)
         baseline_steps = read_steps(output / "baseline/steps.jsonl")
         recovered_steps = read_steps(output / "recovered/steps.jsonl")
+        assert [row["step"] for row in recovered_steps] == [1, 2, 3, 4]
         recovered_tail = recovered_steps[-2:]
         assert [row["step"] for row in recovered_tail] == [3, 4]
         assert [row["sample_cursor"] for row in recovered_tail] == [24, 32]

@@ -87,6 +87,8 @@ class TrainConfig:
         self.gradient_accumulation_steps(world_size)
         if self.strategy not in {"single", "ddp", "fsdp"}:
             raise ValueError("strategy must be single, ddp, or fsdp")
+        if self.strategy == "fsdp" and self.compile:
+            raise ValueError("compile + FSDP checkpointing is not supported")
         if self.sequence_length > self.model.max_sequence_length:
             raise ValueError("sequence_length exceeds model.max_sequence_length")
         if min(self.max_steps, self.micro_batch_size, self.global_batch_size) <= 0:

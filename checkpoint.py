@@ -30,6 +30,13 @@ def _fingerprint(config: TrainConfig) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _dataset_manifest_hash(config: TrainConfig) -> str:
+    manifest = Path(config.data.directory) / "manifest.json"
+    if not manifest.is_file():
+        raise ValueError(f"dataset manifest is missing: {manifest}")
+    return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
 def _rng_state() -> dict[str, Any]:
     return {
         "python": random.getstate(),
@@ -129,6 +136,7 @@ def save_checkpoint(
             "world_size": context.world_size,
             "strategy": config.strategy,
             "config_sha256": _fingerprint(config),
+            "dataset_manifest_sha256": _dataset_manifest_hash(config),
             "step": step,
             "sample_cursor": sample_cursor,
         }
@@ -157,7 +165,11 @@ def load_checkpoint(
         raise ValueError("checkpoint world size differs; rank-local RNG/shards are topology-specific")
     if metadata["config_sha256"] != _fingerprint(config):
         raise ValueError("checkpoint configuration fingerprint mismatch")
-    payload = torch.load(source / f"rank-{context.rank:05d}.pt", map_location=context.device, weights_only=False)
+    if metadata.get("dataset_manifest_sha256") != _dataset_manifest_hash(config):
+        raise ValueError("checkpoint dataset manifest fingerprint mismatch")
+    # RNG state tensors must remain CPU ByteTensors for torch.set_rng_state.
+    # Optimizer/model loaders migrate tensors to their parameter devices.
+    payload = torch.load(source / f"rank-{context.rank:05d}.pt", map_location="cpu", weights_only=False)
     _load_states(model, optimizer, payload["model"], payload["optimizer"])
     if scheduler is not None and payload["scheduler"] is not None:
         scheduler.load_state_dict(payload["scheduler"])

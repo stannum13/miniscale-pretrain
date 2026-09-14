@@ -17,7 +17,9 @@ def test_jsonl_contains_required_metrics(tmp_path) -> None:
         sequence_length=32, measured_steps=2, step_time_ms=10, tokens_per_second=100,
         tokens_per_second_per_gpu=100, scaling_efficiency=None, peak_memory_bytes=0,
         mfu=None, forward_ms=2, backward_ms=4, optimizer_ms=1, communication_ms=None,
-        loss=3.0, gradient_norm=1.2,
+        loss=3.0, gradient_norm=1.2, device_type="cuda", backend="nccl",
+        hardware="fixture-gpu", torch_version="fixture", cuda_version="fixture",
+        experiment_key="controlled-fixture",
     )
     path = tmp_path / "metrics.jsonl"
     write_jsonl(path, record)

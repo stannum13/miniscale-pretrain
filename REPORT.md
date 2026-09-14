@@ -2,7 +2,7 @@
 
 ## Status
 
-This report is generated only from completed `benchmark.jsonl` artifacts. `NOT RUN` means no measurement exists; it is not an estimate. The current repository was built and correctness-tested on a CPU-only host, so CUDA scaling claims remain pending.
+This report is generated only from completed CUDA `benchmark.jsonl` artifacts. CPU diagnostics are excluded. `NOT RUN` means no compatible measurement exists; it is not an estimate. No CUDA benchmark records were found; all scaling cells remain pending.
 
 ## Scaling results
 

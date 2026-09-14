@@ -143,3 +143,11 @@ def estimate_model_flops(model: nn.Module, tokens: int, sequence_length: int) ->
     # 6N is the common forward+backward parameter FLOP estimate; the second
     # term accounts for quadratic attention matmuls omitted by 6N.
     return int(6 * parameters * tokens + 12 * layers * hidden * sequence_length * tokens)
+
+
+def estimate_config_flops(config: ModelConfig, tokens: int, sequence_length: int) -> int:
+    """Global training FLOPs, independent of how FSDP shards live parameters."""
+    return int(
+        6 * config.estimated_parameters() * tokens
+        + 12 * config.num_layers * config.hidden_size * sequence_length * tokens
+    )

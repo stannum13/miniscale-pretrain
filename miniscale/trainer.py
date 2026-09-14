@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import json
 import random
 import signal
 import time
@@ -19,7 +20,8 @@ from distributed.runtime import DistributedContext, peak_memory_bytes, reset_pea
 from distributed.strategies import wrap_model
 from miniscale.config import TrainConfig
 from miniscale.metrics import BenchmarkRecord, StepTimer, mfu, write_jsonl
-from model.transformer import Transformer, estimate_model_flops
+from miniscale.provenance import experiment_key, hardware_name
+from model.transformer import Transformer, estimate_config_flops
 
 
 @dataclass
@@ -80,6 +82,18 @@ def _latest_or_save(
                            step=completed, sample_cursor=cursor, config=config)
 
 
+def _truncate_step_log(path: Path, completed_step: int) -> None:
+    if not path.exists():
+        return
+    retained = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip() and int(json.loads(line)["step"]) <= completed_step:
+            retained.append(line)
+    temporary = path.with_suffix(".jsonl.tmp")
+    temporary.write_text("\n".join(retained) + ("\n" if retained else ""), encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def run_training(
     config: TrainConfig,
     *,
@@ -103,17 +117,20 @@ def run_training(
     )
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _schedule(config))
     accumulation = config.gradient_accumulation_steps(context.world_size)
-    start_step = 0
-    sample_cursor = 0
-    if config.resume:
-        resumed = load_checkpoint(config.resume, model, optimizer, scheduler, context, config=config)
-        start_step, sample_cursor = resumed.step, resumed.sample_cursor
-    sample_cursor_start = sample_cursor
     identifier = run_id or config.run_name
     run_root = Path(config.output_dir) / identifier
     checkpoint_root = run_root / "checkpoints"
     steps_path = run_root / "steps.jsonl"
     checkpoint_root.mkdir(parents=True, exist_ok=True)
+    start_step = 0
+    sample_cursor = 0
+    if config.resume:
+        resumed = load_checkpoint(config.resume, model, optimizer, scheduler, context, config=config)
+        start_step, sample_cursor = resumed.step, resumed.sample_cursor
+        if context.is_main:
+            _truncate_step_log(steps_path, start_step)
+        context.barrier()
+    sample_cursor_start = sample_cursor
     reset_peak_memory(context)
     losses: list[float] = []
     measurements: list[dict[str, float]] = []
@@ -207,7 +224,8 @@ def run_training(
             average = lambda key: sum(float(row[key]) for row in measurements) / count
             seconds = average("step_time_ms") / 1000
             tokens_per_step = config.global_batch_size * config.sequence_length
-            flop_count = estimate_model_flops(model, tokens_per_step, config.sequence_length)
+            flop_count = estimate_config_flops(config.model, tokens_per_step, config.sequence_length)
+            hardware = hardware_name(context.device)
             record = BenchmarkRecord(
                 run_id=identifier, model=config.run_name, gpu_count=context.world_size,
                 strategy=config.strategy, micro_batch_size=config.micro_batch_size,
@@ -222,6 +240,10 @@ def run_training(
                 optimizer_ms=average("optimizer_ms"),
                 communication_ms=(average("communication_ms") if config.strategy == "ddp" else None),
                 loss=average("loss"), gradient_norm=average("gradient_norm"),
+                device_type=context.device.type,
+                backend=(dist.get_backend() if context.distributed else "none"),
+                hardware=hardware, torch_version=torch.__version__, cuda_version=torch.version.cuda,
+                experiment_key=experiment_key(config, hardware),
             )
             write_jsonl(run_root / "benchmark.jsonl", record)
         return TrainResult(start_step, sample_cursor_start, config.max_steps, losses, False, last_checkpoint)
