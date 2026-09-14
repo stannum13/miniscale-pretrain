@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -27,7 +28,13 @@ class DistributedContext:
             device = torch.device("cpu")
         owns = False
         if world_size > 1 and not dist.is_initialized():
-            dist.init_process_group(backend="nccl" if device.type == "cuda" else "gloo")
+            timeout_seconds = int(os.environ.get("MINISCALE_DIST_TIMEOUT_SECONDS", "300"))
+            if timeout_seconds <= 0:
+                raise ValueError("MINISCALE_DIST_TIMEOUT_SECONDS must be positive")
+            dist.init_process_group(
+                backend="nccl" if device.type == "cuda" else "gloo",
+                timeout=timedelta(seconds=timeout_seconds),
+            )
             owns = True
         return cls(rank, local_rank, world_size, device, owns)
 

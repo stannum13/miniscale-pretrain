@@ -1,4 +1,5 @@
 import torch
+from datetime import timedelta
 
 from distributed.runtime import DistributedContext
 from distributed.strategies import unwrap_model, wrap_model
@@ -19,3 +20,17 @@ def test_single_strategy_preserves_model() -> None:
     assert wrapped is model
     assert unwrap_model(wrapped) is model
     assert communication.elapsed_ms == 0
+
+
+def test_process_group_uses_bounded_timeout(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("MINISCALE_DIST_TIMEOUT_SECONDS", "17")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: False)
+    monkeypatch.setattr(torch.distributed, "init_process_group", lambda **kwargs: captured.update(kwargs))
+    context = DistributedContext.from_environment()
+    assert captured["timeout"] == timedelta(seconds=17)
+    assert context.owns_process_group
