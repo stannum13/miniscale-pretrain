@@ -55,3 +55,18 @@ def test_checkpoint_rejects_changed_dataset_manifest(tmp_path: Path) -> None:
     manifest.write_text(manifest.read_text().replace("generator-v1", "generator-v2", 1))
     with pytest.raises(ValueError, match="dataset manifest"):
         load_checkpoint(path, model, optimizer, scheduler, context, config=cfg)
+
+
+def test_checkpoint_rejects_foreign_run_lineage(tmp_path: Path) -> None:
+    context = DistributedContext(0, 0, 1, torch.device("cpu"))
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters())
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+    cfg = load_config("configs/smoke.yaml")
+    cfg.data.directory = str(tmp_path / "tokens")
+    ensure_synthetic_dataset(cfg.data.directory, cfg.model.vocab_size)
+    path = save_checkpoint(tmp_path / "checkpoints", model, optimizer, scheduler, context,
+                           step=1, sample_cursor=8, config=cfg, run_uuid="run-a")
+    with pytest.raises(ValueError, match="lineage"):
+        load_checkpoint(path, model, optimizer, scheduler, context,
+                        config=cfg, run_uuid="run-b")

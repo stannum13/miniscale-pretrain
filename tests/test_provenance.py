@@ -4,7 +4,7 @@ import pytest
 
 from data.dataset import ensure_synthetic_dataset
 from miniscale.config import load_config
-from miniscale.provenance import experiment_key, prepare_run_directory
+from miniscale.provenance import digest_files, experiment_key, prepare_run_directory
 
 
 def test_compiled_and_eager_runs_have_different_experiment_keys(tmp_path) -> None:
@@ -43,6 +43,9 @@ def test_run_manifest_is_immutable_and_records_dataset_revisions(tmp_path) -> No
     payload = json.loads(path.read_text())
     assert payload["dataset_manifest"]["dataset"]["revision"] == "generator-v1"
     assert payload["dataset_manifest"]["tokenizer"]["revision"] == "generator-v1"
+    assert payload["source_digest"]
+    assert payload["python_version"]
+    assert payload["torch_version"]
     with pytest.raises(FileExistsError, match="already exists"):
         prepare_run_directory(
             run_root, cfg, device_type="cpu", backend="none", hardware="fixture",
@@ -64,3 +67,18 @@ def test_resume_requires_matching_run_manifest(tmp_path) -> None:
     with pytest.raises(ValueError, match="manifest does not match"):
         prepare_run_directory(run_root, cfg, device_type="cpu", backend="none",
                               hardware="fixture", world_size=1, is_resume=True)
+
+
+def test_source_digest_and_experiment_key_change_with_source_bytes(tmp_path) -> None:
+    source = tmp_path / "train.py"
+    source.write_text("first")
+    first = digest_files(tmp_path, ["train.py"])
+    source.write_text("second")
+    second = digest_files(tmp_path, ["train.py"])
+    assert first != second
+    cfg = load_config("configs/smoke.yaml")
+    cfg.data.directory = str(tmp_path / "tokens")
+    ensure_synthetic_dataset(cfg.data.directory, cfg.model.vocab_size)
+    assert experiment_key(cfg, "fixture", source_state_digest=first) != experiment_key(
+        cfg, "fixture", source_state_digest=second
+    )

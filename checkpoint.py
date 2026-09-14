@@ -111,6 +111,7 @@ def save_checkpoint(
     step: int,
     sample_cursor: int,
     config: TrainConfig,
+    run_uuid: str | None = None,
 ) -> Path:
     destination = Path(root) / f"step-{step:08d}"
     destination.mkdir(parents=True, exist_ok=True)
@@ -139,6 +140,7 @@ def save_checkpoint(
             "dataset_manifest_sha256": _dataset_manifest_hash(config),
             "step": step,
             "sample_cursor": sample_cursor,
+            "run_uuid": run_uuid,
         }
         metadata_temp = destination / "metadata.json.tmp"
         metadata_temp.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -156,6 +158,7 @@ def load_checkpoint(
     context: DistributedContext,
     *,
     config: TrainConfig,
+    run_uuid: str | None = None,
 ) -> ResumeState:
     source = Path(path)
     if not (source / "COMPLETE").exists():
@@ -167,6 +170,8 @@ def load_checkpoint(
         raise ValueError("checkpoint configuration fingerprint mismatch")
     if metadata.get("dataset_manifest_sha256") != _dataset_manifest_hash(config):
         raise ValueError("checkpoint dataset manifest fingerprint mismatch")
+    if run_uuid is not None and metadata.get("run_uuid") != run_uuid:
+        raise ValueError("checkpoint lineage does not match this run")
     # RNG state tensors must remain CPU ByteTensors for torch.set_rng_state.
     # Optimizer/model loaders migrate tensors to their parameter devices.
     payload = torch.load(source / f"rank-{context.rank:05d}.pt", map_location="cpu", weights_only=False)

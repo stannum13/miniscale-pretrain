@@ -55,6 +55,7 @@ class BenchmarkRecord:
     git_commit: str
     dataset_revision: str
     tokenizer_revision: str
+    source_digest: str
 
 
 def write_jsonl(path: str | Path, record: BenchmarkRecord | dict) -> None:

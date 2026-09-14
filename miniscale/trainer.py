@@ -20,7 +20,7 @@ from distributed.runtime import DistributedContext, peak_memory_bytes, reset_pea
 from distributed.strategies import wrap_model
 from miniscale.config import TrainConfig
 from miniscale.metrics import BenchmarkRecord, StepTimer, mfu, write_jsonl
-from miniscale.provenance import experiment_key, hardware_name, prepare_run_directory
+from miniscale.provenance import hardware_name, prepare_run_directory
 from model.transformer import Transformer, estimate_config_flops
 
 
@@ -74,12 +74,13 @@ def _latest_or_save(
     completed: int,
     cursor: int,
     config: TrainConfig,
+    run_uuid: str,
 ) -> Path:
     path = checkpoint_root / f"step-{completed:08d}"
     if (path / "COMPLETE").exists():
         return path
     return save_checkpoint(checkpoint_root, model, optimizer, scheduler, context,
-                           step=completed, sample_cursor=cursor, config=config)
+                           step=completed, sample_cursor=cursor, config=config, run_uuid=run_uuid)
 
 
 def _truncate_step_log(path: Path, completed_step: int) -> None:
@@ -102,6 +103,23 @@ def run_training(
     crash_after: int | None = None,
 ) -> TrainResult:
     context = DistributedContext.from_environment()
+    try:
+        return _run_training(
+            config, context=context, run_id=run_id,
+            stop_after=stop_after, crash_after=crash_after,
+        )
+    finally:
+        context.close()
+
+
+def _run_training(
+    config: TrainConfig,
+    *,
+    context: DistributedContext,
+    run_id: str | None,
+    stop_after: int | None,
+    crash_after: int | None,
+) -> TrainResult:
     config.validate(context.world_size)
     _seed_everything(config.seed)
     if config.data.synthetic:
@@ -119,16 +137,17 @@ def run_training(
                 run_root, config, device_type=context.device.type, backend=backend,
                 hardware=hardware, world_size=context.world_size, is_resume=config.resume is not None,
             )
-        except (FileExistsError, ValueError) as exc:
+        except Exception as exc:
             preparation_error[0] = (type(exc).__name__, str(exc))
     if context.distributed:
         dist.broadcast_object_list(preparation_error, src=0)
     if preparation_error[0] is not None:
         error_type, message = preparation_error[0]
-        context.close()
         if error_type == "FileExistsError":
             raise FileExistsError(message)
-        raise ValueError(message)
+        if error_type == "ValueError":
+            raise ValueError(message)
+        raise RuntimeError(f"run preparation failed on rank zero ({error_type}): {message}")
     context.barrier()
     run_manifest = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     raw_model = Transformer(config.model)
@@ -147,7 +166,10 @@ def run_training(
     start_step = 0
     sample_cursor = 0
     if config.resume:
-        resumed = load_checkpoint(config.resume, model, optimizer, scheduler, context, config=config)
+        resumed = load_checkpoint(
+            config.resume, model, optimizer, scheduler, context,
+            config=config, run_uuid=run_manifest["run_uuid"],
+        )
         start_step, sample_cursor = resumed.step, resumed.sample_cursor
         if context.is_main:
             _truncate_step_log(steps_path, start_step)
@@ -231,16 +253,19 @@ def run_training(
                 measurements.append(step_metrics)
             if completed % config.checkpoint_interval == 0:
                 last_checkpoint = _latest_or_save(checkpoint_root, model, optimizer, scheduler,
-                                                  context, completed, sample_cursor, config)
+                                                  context, completed, sample_cursor, config,
+                                                  run_manifest["run_uuid"])
             if crash_after is not None and completed >= crash_after:
                 context.barrier()
                 os._exit(86)
             if stop_requested or (stop_after is not None and completed >= stop_after):
                 last_checkpoint = _latest_or_save(checkpoint_root, model, optimizer, scheduler,
-                                                  context, completed, sample_cursor, config)
+                                                  context, completed, sample_cursor, config,
+                                                  run_manifest["run_uuid"])
                 return TrainResult(start_step, sample_cursor_start, completed, losses, True, last_checkpoint)
         last_checkpoint = _latest_or_save(checkpoint_root, model, optimizer, scheduler,
-                                          context, config.max_steps, sample_cursor, config)
+                                          context, config.max_steps, sample_cursor, config,
+                                          run_manifest["run_uuid"])
         if measurements and context.is_main:
             count = len(measurements)
             average = lambda key: sum(float(row[key]) for row in measurements) / count
@@ -264,13 +289,13 @@ def run_training(
                 device_type=context.device.type,
                 backend=backend,
                 hardware=hardware, torch_version=torch.__version__, cuda_version=torch.version.cuda,
-                experiment_key=experiment_key(config, hardware),
+                experiment_key=run_manifest["experiment_key"],
                 git_commit=run_manifest["git_commit"],
                 dataset_revision=str(dataset.manifest["dataset"]["revision"]),
                 tokenizer_revision=str(dataset.manifest["tokenizer"]["revision"]),
+                source_digest=run_manifest["source_digest"],
             )
             write_jsonl(run_root / "benchmark.jsonl", record)
         return TrainResult(start_step, sample_cursor_start, config.max_steps, losses, False, last_checkpoint)
     finally:
         signal.signal(signal.SIGTERM, old_term)
-        context.close()

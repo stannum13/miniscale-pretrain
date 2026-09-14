@@ -4,7 +4,9 @@ import hashlib
 import json
 import os
 import platform
+import stat
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
@@ -24,7 +26,42 @@ def hardware_name(device: torch.device) -> str:
     return platform.machine() or platform.processor() or "unknown-cpu"
 
 
-def experiment_key(config: TrainConfig, hardware: str) -> str:
+def digest_files(root: str | Path, relative_paths: list[str]) -> str:
+    base = Path(root)
+    digest = hashlib.sha256()
+    for relative in sorted(relative_paths):
+        path = base / relative
+        digest.update(relative.encode() + b"\0")
+        if not path.exists() and not path.is_symlink():
+            digest.update(b"<deleted>\0")
+            continue
+        digest.update(str(stat.S_IMODE(path.lstat().st_mode)).encode() + b"\0")
+        content = os.readlink(path).encode() if path.is_symlink() else path.read_bytes()
+        digest.update(hashlib.sha256(content).digest())
+    return digest.hexdigest()
+
+
+def _working_tree_digest() -> str:
+    try:
+        root = Path(subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL
+        ).strip())
+        raw = subprocess.check_output(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=root,
+        )
+        paths = [item.decode() for item in raw.split(b"\0") if item]
+        return digest_files(root, paths)
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def experiment_key(
+    config: TrainConfig,
+    hardware: str,
+    *,
+    source_state_digest: str | None = None,
+) -> str:
     controlled = {
         "model": asdict(config.model),
         "sequence_length": config.sequence_length,
@@ -47,12 +84,13 @@ def experiment_key(config: TrainConfig, hardware: str) -> str:
         "hardware": hardware,
         "torch_version": torch.__version__,
         "cuda_version": torch.version.cuda,
+        "source_digest": source_state_digest or _working_tree_digest(),
     }
     encoded = json.dumps(controlled, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _source_state() -> tuple[str, bool]:
+def _source_state() -> tuple[str, bool, str]:
     try:
         commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
@@ -60,9 +98,9 @@ def _source_state() -> tuple[str, bool]:
         dirty = bool(subprocess.check_output(
             ["git", "status", "--porcelain"], text=True, stderr=subprocess.DEVNULL
         ).strip())
-        return commit, dirty
+        return commit, dirty, _working_tree_digest()
     except (OSError, subprocess.CalledProcessError):
-        return "unknown", True
+        return "unknown", True, _working_tree_digest()
 
 
 def _normalized_config(config: TrainConfig) -> dict:
@@ -83,7 +121,7 @@ def prepare_run_directory(
 ) -> Path:
     root = Path(run_root)
     path = root / "run.json"
-    commit, dirty = _source_state()
+    commit, dirty, source_digest = _source_state()
     dataset_manifest = json.loads((Path(config.data.directory) / "manifest.json").read_text(encoding="utf-8"))
     identity = {
         "config": _normalized_config(config),
@@ -95,6 +133,11 @@ def prepare_run_directory(
         "world_size": world_size,
         "git_commit": commit,
         "git_dirty": dirty,
+        "source_digest": source_digest,
+        "python_version": platform.python_version(),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+        "experiment_key": experiment_key(config, hardware, source_state_digest=source_digest),
     }
     if path.exists():
         if not is_resume:
@@ -107,7 +150,12 @@ def prepare_run_directory(
     if is_resume:
         raise ValueError(f"run manifest is missing for resume: {path}")
     root.mkdir(parents=True, exist_ok=False)
-    payload = {"format_version": 1, "created_at": datetime.now(timezone.utc).isoformat(), **identity}
+    payload = {
+        "format_version": 1,
+        "run_uuid": str(uuid.uuid4()),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        **identity,
+    }
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
