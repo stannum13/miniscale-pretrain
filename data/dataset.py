@@ -98,11 +98,17 @@ class TokenShardDataset:
         self.shards: list[np.memmap] = []
         self._cumulative_windows: list[int] = []
         windows = 0
+        actual_minimum: int | None = None
+        actual_maximum: int | None = None
         for record in self.manifest["shards"]:
             path = self.root / record["file"]
             if verify_hashes and _sha256(path) != record["sha256"]:
                 raise ValueError(f"hash mismatch for {path}")
             array = np.memmap(path, mode="r", dtype="<u4")
+            if verify_hashes:
+                shard_minimum, shard_maximum = int(np.min(array)), int(np.max(array))
+                actual_minimum = shard_minimum if actual_minimum is None else min(actual_minimum, shard_minimum)
+                actual_maximum = shard_maximum if actual_maximum is None else max(actual_maximum, shard_maximum)
             available = len(array) - sequence_length + 1
             if available <= 0:
                 continue
@@ -111,6 +117,12 @@ class TokenShardDataset:
             self._cumulative_windows.append(windows)
         if windows <= 0:
             raise ValueError("no shard is long enough for the requested sequence length")
+        if verify_hashes and "min_token_id" in self.manifest:
+            recorded = (int(self.manifest["min_token_id"]), int(self.manifest["max_token_id"]))
+            actual = (actual_minimum, actual_maximum)
+            if recorded != actual:
+                raise ValueError(f"token bounds mismatch: manifest={recorded}, shards={actual}")
+        self.max_token_id = actual_maximum if verify_hashes else self.manifest.get("max_token_id")
         self.num_windows = windows
         # An affine permutation gives O(1) stable shuffle without a huge index array.
         multiplier = 2 * (seed % max(1, windows)) + 1
@@ -120,7 +132,7 @@ class TokenShardDataset:
         self._offset = (seed * 0x9E3779B1) % windows
 
     def validate_vocab_size(self, vocab_size: int) -> None:
-        maximum = self.manifest.get("max_token_id")
+        maximum = self.max_token_id
         if maximum is None:  # Backward-compatible validation for format-v1 manifests.
             maximum = max(int(np.max(shard)) for shard in self.shards)
         if int(maximum) >= vocab_size:

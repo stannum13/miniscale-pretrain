@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import torch
 
@@ -55,3 +56,17 @@ def test_dataset_rejects_tokens_outside_model_vocabulary(tmp_path: Path) -> None
         assert "token id 96" in str(exc)
     else:
         raise AssertionError("out-of-vocabulary token shard was accepted")
+
+
+def test_manifest_token_bounds_are_verified_against_shards(tmp_path: Path) -> None:
+    make_dataset(tmp_path)
+    path = tmp_path / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["max_token_id"] = 1
+    path.write_text(json.dumps(manifest))
+    try:
+        TokenShardDataset(tmp_path, sequence_length=8, seed=19)
+    except ValueError as exc:
+        assert "token bounds mismatch" in str(exc)
+    else:
+        raise AssertionError("falsified token bounds were accepted")
