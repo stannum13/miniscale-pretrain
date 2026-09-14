@@ -6,6 +6,7 @@ data/processed/
 results/runs/
 results/smoke/
 results/fault-tests/*.json
+results/correctness/*.json
 profiles/*.json
 profiles/*.sqlite
 figures/*.png

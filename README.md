@@ -35,6 +35,7 @@ The default tokenizer is `HuggingFaceTB/SmolLM2-135M`; the scale configurations 
 
 ```bash
 make smoke
+make correctness
 make fault-test
 
 PEAK_TFLOPS=989 MODEL=150m make single-gpu
@@ -46,6 +47,8 @@ make report
 ```
 
 `989` is only an example; use the dense BF16 peak for the actual GPU and power mode. `make benchmark` covers all three models at 1/2/4 GPUs and both DDP/FSDP on multi-GPU. Narrow an exploratory run with `MODELS='150m' GPU_COUNTS='1 2'`. All launchers derive accumulation from `global_batch_size / (micro_batch_size × world_size)` and reject non-integral configurations.
+
+`make correctness` runs the same controlled four-step workload at world sizes 1, 2, and 4, verifies identical step/data cursors, checks loss agreement, and emits a JSON attestation under `results/correctness/`. It uses CUDA automatically when four GPUs are visible and otherwise exercises the same DDP logic through CPU/Gloo.
 
 For a longer run, first use the benchmark table to choose one model/configuration, increase `max_steps`, and launch `train.py` through `torchrun`. Resume with the same topology and configuration:
 

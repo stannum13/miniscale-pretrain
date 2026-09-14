@@ -6,7 +6,7 @@
 - Host used for repository construction: CPU-only (`torch.cuda.is_available() == False`).
 - Evidence policy: CPU smoke and fault tests validate behavior but are not scaling measurements.
 - Fixed comparison invariant: global batch 32 sequences; sequence length 1,024 for scale models.
-- Controlled CPU/Gloo check: 1/2/4 processes completed the same four-step smoke workload at global batch 8; maximum loss deviation versus one process was 0 (2 processes) and 1.19e-7 (4 processes).
+- Controlled CPU/Gloo check (`make correctness`): 1/2/4 processes completed the same four-step smoke workload at global batch 8; maximum loss deviation versus one process was 0 (2 processes) and 1.19e-7 (4 processes). The command writes a machine-readable attestation under `results/correctness/`.
 
 ## Iteration 0 — establish the measurement harness
 
