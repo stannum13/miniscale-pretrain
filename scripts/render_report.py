@@ -47,18 +47,25 @@ def render_table(
     lines = [header]
     for model in models:
         for gpu_count in gpu_counts:
-            matches = [row for row in rows if row["model"] == model and row["gpu_count"] == gpu_count]
-            if not matches:
-                lines.append(f"| {model} | {gpu_count} | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |")
-                continue
-            for row in matches:
-                batch = f'{row["micro_batch_size"]}×{row["gradient_accumulation_steps"]}×{gpu_count}={row["global_batch_size"]}'
-                memory = row["peak_memory_bytes"] / 2**30
-                lines.append(
-                    f'| {model} | {gpu_count} | {row["strategy"]} | {batch} | '
-                    f'{row["tokens_per_second"]:.1f} | {row["tokens_per_second_per_gpu"]:.1f} | '
-                    f'{memory:.2f} GiB | {_number(row["scaling_efficiency"])} | {_number(row.get("mfu"))} |'
-                )
+            for strategy in (("single",) if gpu_count == 1 else ("ddp", "fsdp")):
+                matches = [
+                    row for row in rows
+                    if row["model"] == model and row["gpu_count"] == gpu_count and row["strategy"] == strategy
+                ]
+                if not matches:
+                    lines.append(
+                        f"| {model} | {gpu_count} | {strategy} (NOT RUN) | NOT RUN | NOT RUN | "
+                        "NOT RUN | NOT RUN | NOT RUN | NOT RUN |"
+                    )
+                    continue
+                for row in matches:
+                    batch = f'{row["micro_batch_size"]}×{row["gradient_accumulation_steps"]}×{gpu_count}={row["global_batch_size"]}'
+                    memory = row["peak_memory_bytes"] / 2**30
+                    lines.append(
+                        f'| {model} | {gpu_count} | {row["strategy"]} | {batch} | '
+                        f'{row["tokens_per_second"]:.1f} | {row["tokens_per_second_per_gpu"]:.1f} | '
+                        f'{memory:.2f} GiB | {_number(row["scaling_efficiency"])} | {_number(row.get("mfu"))} |'
+                    )
     return "\n".join(lines)
 
 
@@ -98,7 +105,7 @@ All comparisons hold global batch constant. Each configuration runs configured w
 
 ## Fault recovery
 
-`make fault-test` runs a baseline, hard-exits a second job after a step that was not checkpointed, resumes the last checkpoint, then compares final model/optimizer/scheduler/RNG contents, global step, data cursor, and post-resume losses. A timestamped JSON attestation is written under `results/fault-tests/` only after all checks pass.
+`make fault-test` runs single-process and two-rank baselines, hard-exits matching jobs after a step that was not checkpointed, resumes the last checkpoint, then compares every rank-local model/optimizer/scheduler/RNG payload, global step, data cursor, and post-resume losses. A timestamped JSON attestation is written under `results/fault-tests/` only after all checks pass.
 
 ## Diagnosis protocol
 

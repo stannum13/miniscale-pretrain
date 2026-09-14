@@ -8,15 +8,21 @@ This report is generated only from completed CUDA `benchmark.jsonl` artifacts. C
 
 | model | GPUs | strategy | batch (micro×accum×DP) | tokens/s | tokens/s/GPU | peak HBM/GPU | efficiency | MFU |
 |---|---:|---|---|---:|---:|---:|---:|---:|
-| scale-150m | 1 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-150m | 2 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-150m | 4 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-400m | 1 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-400m | 2 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-400m | 4 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-1b | 1 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-1b | 2 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| scale-1b | 4 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-150m | 1 | single (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-150m | 2 | ddp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-150m | 2 | fsdp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-150m | 4 | ddp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-150m | 4 | fsdp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-400m | 1 | single (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-400m | 2 | ddp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-400m | 2 | fsdp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-400m | 4 | ddp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-400m | 4 | fsdp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-1b | 1 | single (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-1b | 2 | ddp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-1b | 2 | fsdp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-1b | 4 | ddp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| scale-1b | 4 | fsdp (NOT RUN) | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 
 ## How to interpret the configurations
 
@@ -32,7 +38,7 @@ All comparisons hold global batch constant. Each configuration runs configured w
 
 ## Fault recovery
 
-`make fault-test` runs a baseline, hard-exits a second job after a step that was not checkpointed, resumes the last checkpoint, then compares final model/optimizer/scheduler/RNG contents, global step, data cursor, and post-resume losses. A timestamped JSON attestation is written under `results/fault-tests/` only after all checks pass.
+`make fault-test` runs single-process and two-rank baselines, hard-exits matching jobs after a step that was not checkpointed, resumes the last checkpoint, then compares every rank-local model/optimizer/scheduler/RNG payload, global step, data cursor, and post-resume losses. A timestamped JSON attestation is written under `results/fault-tests/` only after all checks pass.
 
 ## Diagnosis protocol
 
