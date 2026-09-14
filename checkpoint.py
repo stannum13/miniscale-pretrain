@@ -101,6 +101,25 @@ def _load_states(model: nn.Module, optimizer: torch.optim.Optimizer, model_state
         optimizer.load_state_dict(FSDP.optim_state_dict_to_load(model, optimizer, optimizer_state))
 
 
+def _collective_operation(context: DistributedContext, phase: str, operation):
+    result = None
+    local_error: tuple[int, str, str] | None = None
+    try:
+        result = operation()
+    except Exception as exc:
+        local_error = (context.rank, type(exc).__name__, str(exc))
+    errors: list[tuple[int, str, str] | None] = [None] * context.world_size
+    if context.distributed:
+        torch.distributed.all_gather_object(errors, local_error)
+    else:
+        errors[0] = local_error
+    failures = [error for error in errors if error is not None]
+    if failures:
+        rank, error_type, message = failures[0]
+        raise RuntimeError(f"{phase} failed on rank {rank}: {message} ({error_type})")
+    return result
+
+
 def save_checkpoint(
     root: str | Path,
     model: nn.Module,
@@ -114,10 +133,17 @@ def save_checkpoint(
     run_uuid: str | None = None,
 ) -> Path:
     destination = Path(root) / f"step-{step:08d}"
-    destination.mkdir(parents=True, exist_ok=True)
-    if (destination / "COMPLETE").exists():
-        raise FileExistsError(f"checkpoint already complete: {destination}")
-    model_state, optimizer_state = _state_for_save(model, optimizer)
+    def prepare_destination() -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        if (destination / "COMPLETE").exists():
+            raise FileExistsError(f"checkpoint already complete: {destination}")
+
+    _collective_operation(context, "checkpoint destination preparation", prepare_destination)
+    states = _collective_operation(
+        context, "checkpoint state collection", lambda: _state_for_save(model, optimizer)
+    )
+    assert states is not None
+    model_state, optimizer_state = states
     payload = {
         "model": model_state,
         "optimizer": optimizer_state,
@@ -128,10 +154,19 @@ def save_checkpoint(
     }
     rank_file = destination / f"rank-{context.rank:05d}.pt"
     temporary = rank_file.with_suffix(".pt.tmp")
-    torch.save(payload, temporary)
-    os.replace(temporary, rank_file)
-    context.barrier()
-    if context.is_main:
+    def write_rank_payload() -> None:
+        try:
+            torch.save(payload, temporary)
+            os.replace(temporary, rank_file)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    _collective_operation(context, "checkpoint rank payload", write_rank_payload)
+
+    def write_metadata() -> None:
+        if not context.is_main:
+            return
         metadata = {
             "format_version": 1,
             "world_size": context.world_size,
@@ -146,7 +181,8 @@ def save_checkpoint(
         metadata_temp.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(metadata_temp, destination / "metadata.json")
         (destination / "COMPLETE").touch()
-    context.barrier()
+
+    _collective_operation(context, "checkpoint metadata", write_metadata)
     return destination
 
 
@@ -192,9 +228,12 @@ def load_checkpoint(
         rank, error_type, message = failures[0]
         raise ValueError(f"checkpoint preflight failed on rank {rank}: {message} ({error_type})")
     assert payload is not None
-    _load_states(model, optimizer, payload["model"], payload["optimizer"])
-    if scheduler is not None and payload["scheduler"] is not None:
-        scheduler.load_state_dict(payload["scheduler"])
-    _restore_rng(payload["rng"])
-    context.barrier()
+    def restore_state() -> None:
+        assert payload is not None
+        _load_states(model, optimizer, payload["model"], payload["optimizer"])
+        if scheduler is not None and payload["scheduler"] is not None:
+            scheduler.load_state_dict(payload["scheduler"])
+        _restore_rng(payload["rng"])
+
+    _collective_operation(context, "checkpoint state restore", restore_state)
     return ResumeState(step=int(payload["step"]), sample_cursor=int(payload["sample_cursor"]))

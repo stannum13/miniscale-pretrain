@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+import checkpoint
 from checkpoint import load_checkpoint, save_checkpoint
 from data.dataset import ensure_synthetic_dataset
 from distributed.runtime import DistributedContext
@@ -70,3 +71,33 @@ def test_checkpoint_rejects_foreign_run_lineage(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="lineage"):
         load_checkpoint(path, model, optimizer, scheduler, context,
                         config=cfg, run_uuid="run-b")
+
+
+def test_checkpoint_save_labels_rank_local_serialization_failure(tmp_path: Path, monkeypatch) -> None:
+    context = DistributedContext(0, 0, 1, torch.device("cpu"))
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters())
+    cfg = load_config("configs/smoke.yaml")
+    cfg.data.directory = str(tmp_path / "tokens")
+    ensure_synthetic_dataset(cfg.data.directory, cfg.model.vocab_size)
+    monkeypatch.setattr(torch, "save", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(RuntimeError, match="checkpoint rank payload failed on rank 0: disk full"):
+        save_checkpoint(tmp_path / "checkpoints", model, optimizer, None, context,
+                        step=1, sample_cursor=8, config=cfg)
+
+
+def test_checkpoint_load_labels_rank_local_state_application_failure(tmp_path: Path, monkeypatch) -> None:
+    context = DistributedContext(0, 0, 1, torch.device("cpu"))
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters())
+    cfg = load_config("configs/smoke.yaml")
+    cfg.data.directory = str(tmp_path / "tokens")
+    ensure_synthetic_dataset(cfg.data.directory, cfg.model.vocab_size)
+    path = save_checkpoint(tmp_path / "checkpoints", model, optimizer, None, context,
+                           step=1, sample_cursor=8, config=cfg)
+    monkeypatch.setattr(
+        checkpoint, "_load_states",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("bad state")),
+    )
+    with pytest.raises(RuntimeError, match="checkpoint state restore failed on rank 0: bad state"):
+        load_checkpoint(path, model, optimizer, None, context, config=cfg)

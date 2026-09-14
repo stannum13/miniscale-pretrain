@@ -195,9 +195,12 @@ def _run_training(
     raw_model = _collective_local(
         context, "model allocation", lambda: Transformer(config.model).to(context.device)
     )
-    model, communication = wrap_model(raw_model, config.strategy, context, bf16=config.bf16)
+    model, communication = _collective_local(
+        context, "distributed model wrapping",
+        lambda: wrap_model(raw_model, config.strategy, context, bf16=config.bf16),
+    )
     if config.compile:
-        model = torch.compile(model)
+        model = _collective_local(context, "model compilation", lambda: torch.compile(model))
     optimizer = _collective_local(
         context,
         "optimizer",
@@ -213,7 +216,9 @@ def _run_training(
     accumulation = config.gradient_accumulation_steps(context.world_size)
     checkpoint_root = run_root / "checkpoints"
     steps_path = run_root / "steps.jsonl"
-    checkpoint_root.mkdir(parents=True, exist_ok=True)
+    _collective_local(
+        context, "checkpoint directory", lambda: checkpoint_root.mkdir(parents=True, exist_ok=True)
+    )
     start_step = 0
     sample_cursor = 0
     if config.resume:
@@ -222,9 +227,10 @@ def _run_training(
             config=config, run_uuid=run_manifest["run_uuid"],
         )
         start_step, sample_cursor = resumed.step, resumed.sample_cursor
-        if context.is_main:
-            _truncate_step_log(steps_path, start_step)
-        context.barrier()
+        _collective_local(
+            context, "step log truncation",
+            lambda: _truncate_step_log(steps_path, start_step) if context.is_main else None,
+        )
     sample_cursor_start = sample_cursor
     reset_peak_memory(context)
     losses: list[float] = []
