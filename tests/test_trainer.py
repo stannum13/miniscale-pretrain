@@ -30,7 +30,7 @@ def test_interrupted_resume_matches_uninterrupted_loss_and_weights(tmp_path: Pat
     assert interrupted.stopped_early
     interrupted_cfg.resume = str(interrupted.last_checkpoint)
     resumed = run_training(interrupted_cfg, run_id="resumed")
-    assert resumed.start_step == 2 and resumed.sample_cursor_start == 8
+    assert resumed.start_step == 2 and resumed.sample_cursor_start == 16
     assert resumed.losses == pytest.approx(baseline.losses[2:], rel=0, abs=1e-7)
     baseline_state = checkpoint_model(baseline.last_checkpoint)
     resumed_state = checkpoint_model(resumed.last_checkpoint)

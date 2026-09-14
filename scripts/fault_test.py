@@ -63,7 +63,7 @@ def main() -> None:
         recovered_steps = read_steps(output / "recovered/steps.jsonl")
         recovered_tail = recovered_steps[-2:]
         assert [row["step"] for row in recovered_tail] == [3, 4]
-        assert [row["sample_cursor"] for row in recovered_tail] == [12, 16]
+        assert [row["sample_cursor"] for row in recovered_tail] == [24, 32]
         for expected, actual in zip(baseline_steps[2:], recovered_tail):
             assert abs(expected["loss"] - actual["loss"]) <= 1e-7
         result = {

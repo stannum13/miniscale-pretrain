@@ -4,7 +4,7 @@ strategy: single
 bf16: false
 sequence_length: 32
 micro_batch_size: 2
-global_batch_size: 4
+global_batch_size: 8
 max_steps: 4
 warmup_steps: 1
 measured_steps: 2

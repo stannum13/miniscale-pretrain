@@ -25,3 +25,13 @@ def test_invalid_global_batch_is_rejected() -> None:
     cfg.global_batch_size = 7
     with pytest.raises(ValueError, match="divisible"):
         cfg.validate(world_size=2)
+
+
+def test_smoke_batch_supports_four_way_distributed_run() -> None:
+    cfg = load_config("configs/smoke.yaml")
+    assert cfg.gradient_accumulation_steps(world_size=4) == 1
+
+
+@pytest.mark.parametrize("name", ("150m", "400m", "1b"))
+def test_scale_family_matches_default_tokenizer_vocabulary(name: str) -> None:
+    assert load_config(Path("configs") / f"{name}.yaml").model.vocab_size == 49_152

@@ -29,7 +29,7 @@ export TOKENIZER_REVISION=<immutable-hugging-face-commit>
 scripts/prepare_data.sh --max-tokens 100000000
 ```
 
-The default tokenizer is `HuggingFaceTB/SmolLM2-135M`. Its vocabulary size must match the model configuration; adjust `vocab_size` if using another tokenizer. The manifest records names, revisions, token counts, and every shard hash.
+The default tokenizer is `HuggingFaceTB/SmolLM2-135M`; the scale configurations match its 49,152-token vocabulary. Adjust `vocab_size` if using another tokenizer. The manifest records names, revisions, token counts, and every shard hash.
 
 ## Commands
 
