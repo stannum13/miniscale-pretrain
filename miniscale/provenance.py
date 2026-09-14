@@ -28,6 +28,7 @@ def experiment_key(config: TrainConfig, hardware: str) -> str:
         "micro_batch_size": config.micro_batch_size,
         "global_batch_size": config.global_batch_size,
         "bf16": config.bf16,
+        "compile": config.compile,
         "dataset_manifest_sha256": manifest_sha256(config),
         "hardware": hardware,
         "torch_version": torch.__version__,
