@@ -116,3 +116,15 @@ def test_source_digest_excludes_generated_output_tree(tmp_path) -> None:
     assert after == before
     source.write_text("changed")
     assert _working_tree_digest(repo_root=tmp_path, excluded_roots=[tmp_path / "runs"]) != before
+
+
+def test_source_digest_never_excludes_tracked_files(tmp_path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    tracked = tmp_path / "data/dataset.py"
+    tracked.parent.mkdir()
+    tracked.write_text("first")
+    subprocess.run(["git", "add", "data/dataset.py"], cwd=tmp_path, check=True)
+    before = _working_tree_digest(repo_root=tmp_path, excluded_roots=[tmp_path / "data"])
+    tracked.write_text("second")
+    after = _working_tree_digest(repo_root=tmp_path, excluded_roots=[tmp_path / "data"])
+    assert after != before

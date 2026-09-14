@@ -70,13 +70,21 @@ def _working_tree_digest(
     if root in exclusions:
         raise ValueError("cannot exclude the repository root from source identity")
     try:
-        raw = subprocess.check_output(
-            ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        tracked_raw = subprocess.check_output(
+            ["git", "-C", str(root), "ls-files", "--cached", "-z"],
         )
-        paths = [
-            item.decode() for item in raw.split(b"\0") if item
+        untracked_raw = subprocess.check_output(
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"],
+        )
+        # Tracked files are always source identity, even when a configured data or
+        # output directory overlaps a repository source subtree. Exclusions only
+        # suppress generated, untracked artifacts.
+        tracked = [item.decode() for item in tracked_raw.split(b"\0") if item]
+        untracked = [
+            item.decode() for item in untracked_raw.split(b"\0") if item
             and not _is_excluded(root / item.decode(), exclusions)
         ]
+        paths = sorted(set(tracked + untracked))
     except (OSError, subprocess.CalledProcessError):
         paths = _fallback_source_paths(root, exclusions)
     if not paths:
