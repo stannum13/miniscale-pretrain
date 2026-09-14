@@ -5,7 +5,8 @@ import pytest
 import torch
 
 from miniscale.config import load_config
-from miniscale.trainer import run_training
+from distributed.runtime import DistributedContext
+from miniscale.trainer import _collective_local, run_training
 
 
 def configured(tmp_path: Path, name: str):
@@ -46,3 +47,9 @@ def test_reusing_run_id_without_resume_is_rejected(tmp_path: Path) -> None:
     run_training(cfg, run_id="same")
     with pytest.raises(FileExistsError, match="already exists"):
         run_training(cfg, run_id="same")
+
+
+def test_local_preflight_errors_are_labeled() -> None:
+    context = DistributedContext(0, 0, 1, torch.device("cpu"))
+    with pytest.raises(RuntimeError, match="dataset preflight failed on rank 0: broken"):
+        _collective_local(context, "dataset", lambda: (_ for _ in ()).throw(ValueError("broken")))

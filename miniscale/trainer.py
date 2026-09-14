@@ -9,6 +9,7 @@ import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import numpy as np
 import torch
@@ -22,6 +23,9 @@ from miniscale.config import TrainConfig
 from miniscale.metrics import BenchmarkRecord, StepTimer, mfu, write_jsonl
 from miniscale.provenance import hardware_name, prepare_run_directory
 from model.transformer import Transformer, estimate_config_flops
+
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -63,6 +67,25 @@ def _maximum(value: float, context: DistributedContext) -> float:
 def _mean(value: float, context: DistributedContext) -> float:
     tensor = torch.tensor(value, dtype=torch.float64, device=context.device)
     return float(context.mean(tensor).item())
+
+
+def _collective_local(context: DistributedContext, phase: str, operation: Callable[[], T]) -> T:
+    result: T | None = None
+    local_error: tuple[int, str, str] | None = None
+    try:
+        result = operation()
+    except Exception as exc:
+        local_error = (context.rank, type(exc).__name__, str(exc))
+    errors: list[tuple[int, str, str] | None] = [None] * context.world_size
+    if context.distributed:
+        dist.all_gather_object(errors, local_error)
+    else:
+        errors[0] = local_error
+    failures = [error for error in errors if error is not None]
+    if failures:
+        rank, error_type, message = failures[0]
+        raise RuntimeError(f"{phase} preflight failed on rank {rank}: {message} ({error_type})")
+    return result  # type: ignore[return-value]
 
 
 def _latest_or_save(
@@ -123,9 +146,25 @@ def _run_training(
     config.validate(context.world_size)
     _seed_everything(config.seed)
     if config.data.synthetic:
-        ensure_synthetic_dataset(config.data.directory, config.model.vocab_size)
-    dataset = TokenShardDataset(config.data.directory, config.sequence_length, config.data.seed)
-    dataset.validate_vocab_size(config.model.vocab_size)
+        preparation_error: list[tuple[str, str] | None] = [None]
+        if context.is_main:
+            try:
+                ensure_synthetic_dataset(config.data.directory, config.model.vocab_size)
+            except Exception as exc:
+                preparation_error[0] = (type(exc).__name__, str(exc))
+        if context.distributed:
+            dist.broadcast_object_list(preparation_error, src=0)
+        if preparation_error[0] is not None:
+            error_type, message = preparation_error[0]
+            raise RuntimeError(f"synthetic data preparation failed ({error_type}): {message}")
+        context.barrier()
+
+    def load_dataset() -> TokenShardDataset:
+        loaded = TokenShardDataset(config.data.directory, config.sequence_length, config.data.seed)
+        loaded.validate_vocab_size(config.model.vocab_size)
+        return loaded
+
+    dataset = _collective_local(context, "dataset", load_dataset)
     identifier = run_id or config.run_name
     run_root = Path(config.output_dir) / identifier
     backend = dist.get_backend() if context.distributed else "none"
@@ -149,16 +188,28 @@ def _run_training(
             raise ValueError(message)
         raise RuntimeError(f"run preparation failed on rank zero ({error_type}): {message}")
     context.barrier()
-    run_manifest = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
-    raw_model = Transformer(config.model)
+    run_manifest = _collective_local(
+        context, "run manifest",
+        lambda: json.loads((run_root / "run.json").read_text(encoding="utf-8")),
+    )
+    raw_model = _collective_local(
+        context, "model allocation", lambda: Transformer(config.model).to(context.device)
+    )
     model, communication = wrap_model(raw_model, config.strategy, context, bf16=config.bf16)
     if config.compile:
         model = torch.compile(model)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=config.learning_rate, betas=(config.beta1, config.beta2),
-        weight_decay=config.weight_decay, fused=context.device.type == "cuda",
+    optimizer = _collective_local(
+        context,
+        "optimizer",
+        lambda: torch.optim.AdamW(
+            model.parameters(), lr=config.learning_rate, betas=(config.beta1, config.beta2),
+            weight_decay=config.weight_decay, fused=context.device.type == "cuda",
+        ),
     )
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _schedule(config))
+    scheduler = _collective_local(
+        context, "scheduler",
+        lambda: torch.optim.lr_scheduler.LambdaLR(optimizer, _schedule(config)),
+    )
     accumulation = config.gradient_accumulation_steps(context.world_size)
     checkpoint_root = run_root / "checkpoints"
     steps_path = run_root / "steps.jsonl"

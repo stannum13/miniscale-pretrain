@@ -161,20 +161,37 @@ def load_checkpoint(
     run_uuid: str | None = None,
 ) -> ResumeState:
     source = Path(path)
-    if not (source / "COMPLETE").exists():
-        raise ValueError(f"checkpoint is incomplete: {source}")
-    metadata = json.loads((source / "metadata.json").read_text(encoding="utf-8"))
-    if metadata["world_size"] != context.world_size:
-        raise ValueError("checkpoint world size differs; rank-local RNG/shards are topology-specific")
-    if metadata["config_sha256"] != _fingerprint(config):
-        raise ValueError("checkpoint configuration fingerprint mismatch")
-    if metadata.get("dataset_manifest_sha256") != _dataset_manifest_hash(config):
-        raise ValueError("checkpoint dataset manifest fingerprint mismatch")
-    if run_uuid is not None and metadata.get("run_uuid") != run_uuid:
-        raise ValueError("checkpoint lineage does not match this run")
-    # RNG state tensors must remain CPU ByteTensors for torch.set_rng_state.
-    # Optimizer/model loaders migrate tensors to their parameter devices.
-    payload = torch.load(source / f"rank-{context.rank:05d}.pt", map_location="cpu", weights_only=False)
+    payload: dict[str, Any] | None = None
+    local_error: tuple[int, str, str] | None = None
+    try:
+        if not (source / "COMPLETE").exists():
+            raise ValueError(f"checkpoint is incomplete: {source}")
+        metadata = json.loads((source / "metadata.json").read_text(encoding="utf-8"))
+        if metadata["world_size"] != context.world_size:
+            raise ValueError("checkpoint world size differs; rank-local RNG/shards are topology-specific")
+        if metadata["config_sha256"] != _fingerprint(config):
+            raise ValueError("checkpoint configuration fingerprint mismatch")
+        if metadata.get("dataset_manifest_sha256") != _dataset_manifest_hash(config):
+            raise ValueError("checkpoint dataset manifest fingerprint mismatch")
+        if run_uuid is not None and metadata.get("run_uuid") != run_uuid:
+            raise ValueError("checkpoint lineage does not match this run")
+        # RNG state tensors must remain CPU ByteTensors for torch.set_rng_state.
+        # Optimizer/model loaders migrate tensors to their parameter devices.
+        payload = torch.load(
+            source / f"rank-{context.rank:05d}.pt", map_location="cpu", weights_only=False
+        )
+    except Exception as exc:
+        local_error = (context.rank, type(exc).__name__, str(exc))
+    errors: list[tuple[int, str, str] | None] = [None] * context.world_size
+    if context.distributed:
+        torch.distributed.all_gather_object(errors, local_error)
+    else:
+        errors[0] = local_error
+    failures = [error for error in errors if error is not None]
+    if failures:
+        rank, error_type, message = failures[0]
+        raise ValueError(f"checkpoint preflight failed on rank {rank}: {message} ({error_type})")
+    assert payload is not None
     _load_states(model, optimizer, payload["model"], payload["optimizer"])
     if scheduler is not None and payload["scheduler"] is not None:
         scheduler.load_state_dict(payload["scheduler"])
