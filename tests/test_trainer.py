@@ -6,7 +6,7 @@ import torch
 
 from miniscale.config import load_config
 from distributed.runtime import DistributedContext
-from miniscale.trainer import _collective_local, run_training
+from miniscale.trainer import _collective_local, _profile_settings, run_training
 
 
 def configured(tmp_path: Path, name: str):
@@ -53,3 +53,18 @@ def test_local_preflight_errors_are_labeled() -> None:
     context = DistributedContext(0, 0, 1, torch.device("cpu"))
     with pytest.raises(RuntimeError, match="dataset preflight failed on rank 0: broken"):
         _collective_local(context, "dataset", lambda: (_ for _ in ()).throw(ValueError("broken")))
+
+
+def test_profile_settings_are_explicit_and_bounded(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("MINISCALE_PROFILE_DIR", raising=False)
+    assert _profile_settings(tmp_path, rank=0) is None
+
+    monkeypatch.setenv("MINISCALE_PROFILE_DIR", "profiles/cuda")
+    monkeypatch.setenv("MINISCALE_PROFILE_WAIT", "20")
+    monkeypatch.setenv("MINISCALE_PROFILE_ACTIVE", "3")
+    settings = _profile_settings(tmp_path, rank=2)
+    assert settings == (tmp_path / "profiles/cuda", 20, 3, "rank-00002")
+
+    monkeypatch.setenv("MINISCALE_PROFILE_ACTIVE", "0")
+    with pytest.raises(ValueError, match="PROFILE_ACTIVE"):
+        _profile_settings(tmp_path, rank=0)

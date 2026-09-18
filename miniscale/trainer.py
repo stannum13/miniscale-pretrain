@@ -38,6 +38,43 @@ class TrainResult:
     last_checkpoint: Path
 
 
+def _profile_settings(base: Path, rank: int) -> tuple[Path, int, int, str] | None:
+    raw_directory = os.environ.get("MINISCALE_PROFILE_DIR")
+    if not raw_directory:
+        return None
+    directory = Path(raw_directory)
+    if not directory.is_absolute():
+        directory = base / directory
+    wait = int(os.environ.get("MINISCALE_PROFILE_WAIT", "0"))
+    active = int(os.environ.get("MINISCALE_PROFILE_ACTIVE", "3"))
+    if wait < 0:
+        raise ValueError("MINISCALE_PROFILE_WAIT must be non-negative")
+    if active <= 0:
+        raise ValueError("MINISCALE_PROFILE_ACTIVE must be positive")
+    return directory, wait, active, f"rank-{rank:05d}"
+
+
+def _create_profiler(context: DistributedContext):
+    settings = _profile_settings(Path.cwd(), context.rank)
+    if settings is None:
+        return None
+    directory, wait, active, worker_name = settings
+    directory.mkdir(parents=True, exist_ok=True)
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    if context.device.type == "cuda":
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+    return torch.profiler.profile(
+        activities=activities,
+        schedule=torch.profiler.schedule(wait=wait, warmup=1, active=active, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(
+            str(directory), worker_name=worker_name, use_gzip=True
+        ),
+        record_shapes=True,
+        profile_memory=True,
+        with_flops=True,
+    )
+
+
 def _seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -116,6 +153,15 @@ def _truncate_step_log(path: Path, completed_step: int) -> None:
     temporary = path.with_suffix(".jsonl.tmp")
     temporary.write_text("\n".join(retained) + ("\n" if retained else ""), encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _write_crash_marker(run_root: Path, step: int, sample_cursor: int) -> None:
+    path = run_root / "intentional-crash.json"
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump({"exit_code": 86, "step": step, "sample_cursor": sample_cursor}, handle)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def run_training(
@@ -243,7 +289,12 @@ def _run_training(
         stop_requested = True
 
     old_term = signal.signal(signal.SIGTERM, request_stop)
+    profiler = _create_profiler(context)
+    profiler_started = False
     try:
+        if profiler is not None:
+            profiler.start()
+            profiler_started = True
         for step in range(start_step, config.max_steps):
             context.barrier()
             context.synchronize()
@@ -306,6 +357,8 @@ def _run_training(
             }
             if context.is_main:
                 write_jsonl(steps_path, step_metrics)
+            if profiler is not None:
+                profiler.step()
             if config.warmup_steps <= step < config.warmup_steps + config.measured_steps:
                 measurements.append(step_metrics)
             if completed % config.checkpoint_interval == 0:
@@ -313,6 +366,8 @@ def _run_training(
                                                   context, completed, sample_cursor, config,
                                                   run_manifest["run_uuid"])
             if crash_after is not None and completed >= crash_after:
+                if context.is_main:
+                    _write_crash_marker(run_root, completed, sample_cursor)
                 context.barrier()
                 os._exit(86)
             if stop_requested or (stop_after is not None and completed >= stop_after):
@@ -355,4 +410,6 @@ def _run_training(
             write_jsonl(run_root / "benchmark.jsonl", record)
         return TrainResult(start_step, sample_cursor_start, config.max_steps, losses, False, last_checkpoint)
     finally:
+        if profiler is not None and profiler_started:
+            profiler.stop()
         signal.signal(signal.SIGTERM, old_term)

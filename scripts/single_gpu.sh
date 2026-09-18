@@ -8,3 +8,7 @@ run_id="${RUN_ID:-${model}-1gpu-single-$(date -u +%Y%m%dT%H%M%SZ)}"
 torchrun --standalone --nproc-per-node=1 bench.py \
   --config "configs/${model}.yaml" --strategy single --run-id "$run_id" \
   --peak-tflops "$PEAK_TFLOPS"
+
+if [[ "${DISCARD_CHECKPOINTS:-0}" == "1" ]]; then
+  find "results/$run_id/checkpoints" -mindepth 1 -maxdepth 1 -type d -exec rm -rf '{}' +
+fi

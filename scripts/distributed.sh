@@ -14,3 +14,7 @@ run_id="${RUN_ID:-${model}-${gpu_count}gpu-${strategy}-$(date -u +%Y%m%dT%H%M%SZ
 torchrun --standalone --nproc-per-node="$gpu_count" bench.py \
   --config "configs/${model}.yaml" --strategy "$strategy" --run-id "$run_id" \
   --peak-tflops "$PEAK_TFLOPS"
+
+if [[ "${DISCARD_CHECKPOINTS:-0}" == "1" ]]; then
+  find "results/$run_id/checkpoints" -mindepth 1 -maxdepth 1 -type d -exec rm -rf '{}' +
+fi
