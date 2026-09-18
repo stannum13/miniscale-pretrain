@@ -33,13 +33,13 @@
 ## Iteration 2 — provision bounded CUDA evidence
 
 - Bottleneck selected: no CUDA host is available locally, so the remaining throughput, HBM, MFU, communication, and fault/recovery claims cannot be measured.
-- Evidence: Google Cloud Compute quotas currently allow 1 global GPU and 3 regional Spot L4 GPUs, below the four-GPU experiment requirement; CPU quotas are sufficient. A separate Vertex AI four-Spot-L4 request is pending.
+- Evidence: Google Cloud Compute quotas allow 1 global GPU and 3 regional Spot L4 GPUs, below the four-GPU experiment requirement; CPU quotas are sufficient. Vertex AI denied both separate four-GPU Spot and on-demand L4 training requests at 0/4.
 - Predicted effect: a four-L4 `g2-standard-48` should complete the controlled matrix and expose the predicted small-model communication/launch-latency penalty; profiling itself will reduce throughput, so it is isolated from benchmark records.
 - Smallest benchmark and fixed controls: a separate 150M, two-GPU DDP trace captures 20 wait steps plus one profiler warmup and three active steps; the unprofiled matrix keeps global batch 32 and sequence length 1,024.
 - Profile artifact: gzip-compressed per-rank PyTorch traces under `profiles/150m-2gpu-ddp/`, uploaded with all terminal artifacts.
-- Observed result: provisioning workflow verified locally; GPU result pending provider quota. No billable VM has been launched.
+- Observed result: provisioning workflow verified locally; all available GCloud four-L4 quota routes were denied. No billable VM was launched and no GPU compute cost was incurred.
 - Prediction error/explanation: unavailable until CUDA execution. Compute Engine partially approved 3/4 regional L4s but denied the global four-GPU request, so the guard correctly prevents an underspecified run.
-- Next decision: launch automatically when one GCloud route exposes four L4s; otherwise retain `NOT RUN` rather than fabricating GPU evidence.
+- Next decision: retain `NOT RUN` rather than fabricating GPU evidence. A real run now requires Google to approve four GPUs or explicit authorization to use another provider.
 - Cost guard: Spot VM hard-deletes after six hours; conservative maximum is $28 ($4.50/hour × 6 + $1), below the authorized $30 ceiling. Artifact storage has a seven-day deletion policy.
 
 ## Iteration template
